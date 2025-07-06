@@ -1,0 +1,1 @@
+qemu-system-x86_64: -drive file=/users/Tingjia/project/image/bullseye.img,format=raw: Could not open '/users/Tingjia/project/image/bullseye.img': No such file or directory
