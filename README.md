@@ -1,9 +1,16 @@
 This is a repo trying to reproduce or detect scheduler bugs.
 
+Usage:
+
+change the config/.env
+
+
 ./setup_kernel.sh # build the kernel with specific commit id and get kernel binary
 
 ./setup_image.sh # Create Debian Bullseye Linux image
 
+Start qemu
+```
 qemu-system-x86_64 \
 	-m 2G \
 	-smp 2 \
@@ -16,3 +23,4 @@ qemu-system-x86_64 \
 	-nographic \
 	-pidfile vm.pid \
 	2>&1 | tee vm.log
+```
