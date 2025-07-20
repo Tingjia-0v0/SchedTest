@@ -10,7 +10,7 @@ source config/.env
 
 export IMAGE=$IMAGE
 export KERNEL=$KERNEL
-# Check if the target directory is provided
+# Check if the target commit hash is provided
 if [ -z "$1" ]; then
     echo "Usage: $0 <commit_hash>"
     exit 1
@@ -26,7 +26,7 @@ echo "Commit hash: $commit_hash"
 # Check if --skip-download is provided, if not, install dependencies, init kernel repo
 if [[ ! "$*" =~ "--skip-download" ]]; then
     sudo apt update
-    sudo apt install -y make gcc flex bison libncurses-dev libelf-dev libssl-dev
+    sudo apt install -y make gcc flex bison libncurses-dev libelf-dev libssl-dev clang llvm
 
     if [ -d $KERNEL ]; then
         rm -rf $KERNEL
@@ -42,15 +42,15 @@ else
     cd $KERNEL
 fi
 
-make defconfig
-make kvm_guest.config
+make CC=clang defconfig
+make CC=clang kvm_guest.config
 
 # update kernel config to the new configs
 python $SchedTestDir/update_kernel_config.py $KERNEL/.config $SchedTestDir/config/kernel_config.cfg
-make olddefconfig
+make CC=clang olddefconfig
 python $SchedTestDir/check_kernel_config.py $KERNEL/.config $SchedTestDir/config/kernel_config.cfg # check if the updated kernel config is reverted by  `make olddefconfig`
 
-make -j$(nproc)
+make CC=clang -j$(nproc)
 
 # check if the kernel is built
 if [ -f $KERNEL/arch/x86/boot/bzImage ] && [ -f $KERNEL/vmlinux ]; then

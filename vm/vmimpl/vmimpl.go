@@ -1,0 +1,240 @@
+// Copyright 2017 syzkaller project authors. All rights reserved.
+// Use of this source code is governed by Apache 2 LICENSE that can be found in the LICENSE file.
+
+// Package vmimpl provides an abstract test machine (VM, physical machine, etc)
+// interface for the rest of the system. For convenience test machines are subsequently
+// collectively called VMs.
+// The package also provides various utility functions for VM implementations.
+package vmimpl
+
+import (
+	"context"
+	"crypto/rand"
+	"errors"
+	"fmt"
+	"io"
+	"math/big"
+	"net"
+	"os"
+	"os/exec"
+	"strings"
+	"syscall"
+	"time"
+
+	"schedtest/pkg/log"
+	"schedtest/pkg/osutil"
+	"schedtest/sys/targets"
+)
+
+// Pool represents a set of test machines (VMs, physical devices, etc) of particular type.
+type Pool interface {
+	// Count returns total number of VMs in the pool.
+	Count() int
+
+	// Create creates and boots a new VM instance.
+	Create(workdir string, index int) (Instance, error)
+}
+
+// Instance represents a single VM.
+type Instance interface {
+	// Copy copies a hostSrc file into VM and returns file name in VM.
+	Copy(hostSrc string) (string, error)
+
+	// Forward sets up forwarding from within VM to the given tcp
+	// port on the host and returns the address to use in VM.
+	Forward(port int) (string, error)
+
+	// Run runs cmd inside of the VM (think of ssh cmd).
+	// outc receives combined cmd and kernel console output.
+	// errc receives either command Wait return error or vmimpl.ErrTimeout.
+	// Command terminates with context. Use context.WithTimeout to terminate it earlier.
+	Run(ctx context.Context, command string) (outc <-chan []byte, errc <-chan error, err error)
+
+	// Close stops and destroys the VM.
+	io.Closer
+}
+
+// Env contains global constant parameters for a pool of VMs.
+type Env struct {
+	// Unique name
+	// Can be used for VM name collision resolution if several pools share global name space.
+	Name      string
+	OS        string // target OS
+	Arch      string // target arch
+	Workdir   string
+	Image     string
+	SSHUser   string
+	Timeouts  targets.Timeouts
+	Debug     bool
+	Config    []byte // json-serialized VM-type-specific config
+	KernelSrc string
+}
+
+// BootError is returned by Pool.Create when VM does not boot.
+// It should not be used for VMM intfrastructure errors, i.e. for problems not related
+// to the tested kernel itself.
+type BootError struct {
+	Title  string
+	Output []byte
+}
+
+func MakeBootError(err error, output []byte) error {
+	if len(output) == 0 {
+		// In reports, it may be helpful to distinguish the case when the boot output
+		// was collected, but turned out to be empty.
+		output = []byte("<empty boot output>")
+	}
+	var verboseError *osutil.VerboseError
+	if errors.As(err, &verboseError) {
+		return BootError{verboseError.Title, append(verboseError.Output, output...)}
+	}
+	return BootError{err.Error(), output}
+}
+
+func (err BootError) Error() string {
+	return fmt.Sprintf("%v\n%s", err.Title, err.Output)
+}
+
+func (err BootError) BootError() (string, []byte) {
+	return err.Title, err.Output
+}
+
+// By default, all Pool.Create() errors are related to infrastructure problems.
+// InfraError is to be used when we want to also attach output to the title.
+type InfraError struct {
+	Title  string
+	Output []byte
+}
+
+func (err InfraError) Error() string {
+	return fmt.Sprintf("%v\n%s", err.Title, err.Output)
+}
+
+func (err InfraError) InfraError() (string, []byte) {
+	return err.Title, err.Output
+}
+
+var (
+	// Close to interrupt all pending operations in all VMs.
+	Shutdown   = make(chan struct{})
+	ErrTimeout = errors.New("timeout")
+)
+
+type CmdCloser struct {
+	*exec.Cmd
+}
+
+func (cc CmdCloser) Close() error {
+	cc.Process.Kill()
+	return cc.Wait()
+}
+
+var WaitForOutputTimeout = 10 * time.Second
+
+func Multiplex(ctx context.Context, cmd *exec.Cmd, merger *OutputMerger) (
+	<-chan []byte, <-chan error, error) {
+
+	errc := make(chan error, 1)
+	signal := func(err error) {
+		select {
+		case errc <- err:
+		default:
+		}
+	}
+	go func() {
+		select {
+		case <-ctx.Done():
+			signal(ErrTimeout)
+		case err := <-merger.Err:
+			cmd.Process.Kill()
+			if cmdErr := cmd.Wait(); cmdErr == nil {
+				// If the command exited successfully, we got EOF error from merger.
+				// But in this case no error has happened and the EOF is expected.
+				err = nil
+			}
+			// Once the command has failed, we might want to let the full console
+			// output accumulate before we abort the console connection too.
+			if err != nil {
+				time.Sleep(WaitForOutputTimeout)
+			}
+
+			signal(err)
+			return
+		}
+		cmd.Process.Kill()
+		cmd.Wait()
+	}()
+	return merger.Output, errc, nil
+}
+
+func RandomPort() int {
+	n, err := rand.Int(rand.Reader, big.NewInt(64<<10-1<<10))
+	if err != nil {
+		panic(err)
+	}
+	return int(n.Int64()) + 1<<10
+}
+
+func UnusedTCPPort() int {
+	for {
+		port := RandomPort()
+		ln, err := net.Listen("tcp", fmt.Sprintf("localhost:%v", port))
+		if err == nil {
+			ln.Close()
+			return port
+		}
+
+		// Continue searching for a port only if we fail with EADDRINUSE or don't have permissions to use this port.
+		// Although we exclude ports <1024 in RandomPort(), it's still possible that we can face a restricted port.
+		var opErr *net.OpError
+		if errors.As(err, &opErr) && opErr.Op == "listen" {
+			var syscallErr *os.SyscallError
+			if errors.As(opErr.Err, &syscallErr) {
+				if errors.Is(syscallErr.Err, syscall.EADDRINUSE) || errors.Is(syscallErr.Err, syscall.EACCES) {
+					continue
+				}
+			}
+		}
+		log.Fatalf("error allocating port localhost:%d: %v", port, err)
+	}
+}
+
+// Escapes double quotes(and nested double quote escapes). Ignores any other escapes.
+// Reference: https://www.gnu.org/software/bash/manual/html_node/Double-Quotes.html
+func EscapeDoubleQuotes(inp string) string {
+	var ret strings.Builder
+	for pos := 0; pos < len(inp); pos++ {
+		// If inp[pos] is not a double quote or a backslash, just use
+		// as is.
+		if inp[pos] != '"' && inp[pos] != '\\' {
+			ret.WriteByte(inp[pos])
+			continue
+		}
+		// If it is a double quote, escape.
+		if inp[pos] == '"' {
+			ret.WriteString("\\\"")
+			continue
+		}
+		// If we detect a backslash, reescape only if what it's already escaping
+		// is a double-quotes.
+		temp := ""
+		j := pos
+		for ; j < len(inp); j++ {
+			if inp[j] == '\\' {
+				temp += string(inp[j])
+				continue
+			}
+			// If the escape corresponds to a double quotes, re-escape.
+			// Else, just use as is.
+			if inp[j] == '"' {
+				temp = temp + temp + "\\\""
+			} else {
+				temp += string(inp[j])
+			}
+			break
+		}
+		ret.WriteString(temp)
+		pos = j
+	}
+	return ret.String()
+}
