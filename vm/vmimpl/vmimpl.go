@@ -63,6 +63,7 @@ type Env struct {
 	Arch      string // target arch
 	Workdir   string
 	Image     string
+	SSHKey    string
 	SSHUser   string
 	Timeouts  targets.Timeouts
 	Debug     bool
@@ -131,7 +132,7 @@ func (cc CmdCloser) Close() error {
 
 var WaitForOutputTimeout = 10 * time.Second
 
-func Multiplex(ctx context.Context, cmd *exec.Cmd, merger *OutputMerger) (
+func Multiplex(ctx context.Context, cmd *exec.Cmd, merger *OutputMerger, mergerErrNamename string) (
 	<-chan []byte, <-chan error, error) {
 
 	errc := make(chan error, 1)
@@ -145,7 +146,7 @@ func Multiplex(ctx context.Context, cmd *exec.Cmd, merger *OutputMerger) (
 		select {
 		case <-ctx.Done():
 			signal(ErrTimeout)
-		case err := <-merger.Err:
+		case err := <-merger.Err[mergerErrNamename]:
 			cmd.Process.Kill()
 			if cmdErr := cmd.Wait(); cmdErr == nil {
 				// If the command exited successfully, we got EOF error from merger.

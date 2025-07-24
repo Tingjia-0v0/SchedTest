@@ -135,6 +135,7 @@ func Complete(cfg *Config) error {
 		cfg.Workdir, "workdir",
 		cfg.SchedTest, "schedtest",
 		cfg.Type, "type",
+		cfg.SSHKey, "ssh_key",
 		cfg.SSHUser, "ssh_user",
 	); err != nil {
 		return err

@@ -41,6 +41,7 @@ type Config struct {
 	// Parameters for concrete types are in Config type in vm/TYPE/TYPE.go, e.g. vm/qemu/qemu.go.
 	VM json.RawMessage `json:"vm"`
 
+	SSHKey  string `json:"ssh_key,omitempty"`
 	SSHUser string `json:"ssh_user,omitempty"`
 	// TCP address to serve RPC for fuzzer processes (optional).
 	RPC string `json:"rpc,omitempty"`

@@ -12,7 +12,7 @@ import (
 
 type OutputMerger struct {
 	Output chan []byte
-	Err    chan error
+	Err    map[string]chan error
 	teeMu  sync.Mutex
 	tee    io.Writer
 	wg     sync.WaitGroup
@@ -31,7 +31,7 @@ func (err MergerError) Error() string {
 func NewOutputMerger(tee io.Writer) *OutputMerger {
 	return &OutputMerger{
 		Output: make(chan []byte, 1000),
-		Err:    make(chan error, 1),
+		Err:    make(map[string]chan error),
 		tee:    tee,
 	}
 }
@@ -42,27 +42,18 @@ func (merger *OutputMerger) Wait() {
 }
 
 func (merger *OutputMerger) Add(name string, r io.ReadCloser) {
-	merger.AddDecoder(name, r, nil)
+	merger.AddDecoder(name, r)
 }
 
-func (merger *OutputMerger) AddDecoder(name string, r io.ReadCloser,
-	decoder func(data []byte) (start, size int, decoded []byte)) {
+func (merger *OutputMerger) AddDecoder(name string, r io.ReadCloser) {
 	merger.wg.Add(1)
+	merger.Err[name] = make(chan error, 1)
 	go func() {
 		var pending []byte
-		var proto []byte
 		var buf [4 << 10]byte
 		for {
 			n, err := r.Read(buf[:])
 			if n != 0 {
-				if decoder != nil {
-					proto = append(proto, buf[:n]...)
-					start, size, decoded := decoder(proto)
-					proto = proto[start+size:]
-					if len(decoded) != 0 {
-						merger.Output <- decoded // note: this can block
-					}
-				}
 				// Remove all carriage returns.
 				buf := buf[:n]
 				if bytes.IndexByte(buf, '\r') != -1 {
@@ -84,7 +75,7 @@ func (merger *OutputMerger) AddDecoder(name string, r io.ReadCloser,
 					}
 				}
 			}
-			if err != nil {
+			if err != nil { // includes EOF
 				if len(pending) != 0 {
 					pending = append(pending, '\n')
 					if merger.tee != nil {
@@ -99,7 +90,7 @@ func (merger *OutputMerger) AddDecoder(name string, r io.ReadCloser,
 				}
 				r.Close()
 				select {
-				case merger.Err <- MergerError{name, r, err}:
+				case merger.Err[name] <- MergerError{name, r, err}:
 				default:
 				}
 				merger.wg.Done()
