@@ -43,7 +43,7 @@ func (mon *monitor) monitorExecution() *report.Report {
 					crash = lostConnectionCrash
 				}
 				return mon.extractError(crash)
-			case ErrTimeout:
+			case vmimpl.ErrTimeout:
 				if mon.exit&ExitTimeout == 0 {
 					return mon.extractError(timeoutCrash)
 				}
@@ -75,7 +75,7 @@ func (mon *monitor) monitorExecution() *report.Report {
 			if time.Since(mon.lastExecuteTime) > mon.inst.pool.timeouts.NoOutput {
 				return mon.extractError(noOutputCrash)
 			}
-		case <-Shutdown:
+		case <-vmimpl.Shutdown:
 			return nil
 		}
 	}
@@ -123,7 +123,7 @@ func (mon *monitor) extractError(defaultError string) *report.Report {
 	}
 	diagOutput := []byte{}
 	if defaultError != "" {
-		diagOutput = mon.inst.diagnose(mon.createReport(defaultError))
+		diagOutput = mon.inst.Diagnose(mon.createReport(defaultError))
 	}
 	// Give it some time to finish writing the error message.
 	// But don't wait for "no output", we already waited enough.
@@ -133,8 +133,9 @@ func (mon *monitor) extractError(defaultError string) *report.Report {
 
 	if defaultError == "" && mon.reporter.ContainsCrash(mon.output[mon.matchPos:]) {
 		// We did not call Diagnose above because we thought there is no error, so call it now.
-		diagOutput = mon.inst.diagnose(mon.createReport(defaultError))
+		diagOutput = mon.inst.Diagnose(mon.createReport(defaultError))
 	}
+
 	rep := mon.createReport(defaultError)
 	if rep == nil {
 		return nil
@@ -183,8 +184,37 @@ func (mon *monitor) waitForOutput() {
 			mon.output = append(mon.output, out...)
 		case <-timer.C:
 			return
-		case <-Shutdown:
+		case <-vmimpl.Shutdown:
 			return
 		}
 	}
 }
+
+type ExitCondition int
+
+const (
+	// The program is allowed to exit after timeout.
+	ExitTimeout = ExitCondition(1 << iota)
+	// The program is allowed to exit with no errors.
+	ExitNormal
+	// The program is allowed to exit with errors.
+	ExitError
+)
+
+const (
+	maxErrorLength = 256
+
+	lostConnectionCrash  = "lost connection to test machine"
+	noOutputCrash        = "no output from test machine"
+	timeoutCrash         = "timed out"
+	executorPreemptedStr = "SYZ-EXECUTOR: PREEMPTED"
+	vmDiagnosisStart     = "\nVM DIAGNOSIS:\n"
+)
+
+var (
+	executingProgram = []byte("executed programs:") // syz-execprog output
+
+	afterContext = 128 << 10
+
+	tickerPeriod = 10 * time.Second
+)

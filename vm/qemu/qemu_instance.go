@@ -19,10 +19,9 @@ import (
 
 	"schedtest/pkg/log"
 	"schedtest/pkg/osutil"
+	"schedtest/pkg/report"
 	"schedtest/sys/targets"
 	"schedtest/vm/vmimpl"
-
-	"schedtest/pkg/report"
 
 	"github.com/google/uuid"
 )
@@ -215,7 +214,7 @@ func (inst *Instance) Run(ctx context.Context, command string) (
 	return vmimpl.Multiplex(ctx, cmd, inst.merger, mergerErrName)
 }
 
-func (inst *Instance) Info() ([]byte, error) {
+func (inst *Instance) MachineInfo() ([]byte, error) {
 	info := fmt.Sprintf("%v\n%v %q\n", inst.version, inst.cfg.Qemu, inst.args)
 	return []byte(info), nil
 }
