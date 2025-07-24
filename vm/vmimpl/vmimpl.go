@@ -12,7 +12,6 @@ import (
 	"crypto/rand"
 	"errors"
 	"fmt"
-	"io"
 	"math/big"
 	"net"
 	"os"
@@ -26,33 +25,39 @@ import (
 	"schedtest/sys/targets"
 )
 
-// Pool represents a set of test machines (VMs, physical devices, etc) of particular type.
-type Pool interface {
-	// Count returns total number of VMs in the pool.
-	Count() int
+// // Pool represents a set of test machines (VMs, physical devices, etc) of particular type.
+// type Pool interface {
+// 	// Count returns total number of VMs in the pool.
+// 	Count() int
 
-	// Create creates and boots a new VM instance.
-	Create(workdir string, index int) (Instance, error)
-}
+// 	// Create creates and boots a new VM instance.
+// 	Create(workdir string, index int) (Instance, error)
+// }
 
-// Instance represents a single VM.
-type Instance interface {
-	// Copy copies a hostSrc file into VM and returns file name in VM.
-	Copy(hostSrc string) (string, error)
+// // Instance represents a single VM.
+// type Instance interface {
+// 	// Copy copies a hostSrc file into VM and returns file name in VM.
+// 	Copy(hostSrc string) (string, error)
 
-	// Forward sets up forwarding from within VM to the given tcp
-	// port on the host and returns the address to use in VM.
-	Forward(port int) (string, error)
+// 	// Forward sets up forwarding from within VM to the given tcp
+// 	// port on the host and returns the address to use in VM.
+// 	Forward(port int) (string, error)
 
-	// Run runs cmd inside of the VM (think of ssh cmd).
-	// outc receives combined cmd and kernel console output.
-	// errc receives either command Wait return error or vmimpl.ErrTimeout.
-	// Command terminates with context. Use context.WithTimeout to terminate it earlier.
-	Run(ctx context.Context, command string) (outc <-chan []byte, errc <-chan error, err error)
+// 	// Run runs cmd inside of the VM (think of ssh cmd).
+// 	// outc receives combined cmd and kernel console output.
+// 	// errc receives either command Wait return error or vmimpl.ErrTimeout.
+// 	// Command terminates with context. Use context.WithTimeout to terminate it earlier.
+// 	Run(ctx context.Context, command string) (outc <-chan []byte, errc <-chan error, err error)
 
-	// Close stops and destroys the VM.
-	io.Closer
-}
+// 	// Info returns information about the VM.
+// 	Info() ([]byte, error)
+
+// 	// Diagnose diagnoses the VM.
+// 	Diagnose(rep *report.Report) []byte
+
+// 	// Close stops and destroys the VM.
+// 	io.Closer
+// }
 
 // Env contains global constant parameters for a pool of VMs.
 type Env struct {

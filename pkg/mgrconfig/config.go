@@ -3,10 +3,6 @@
 
 package mgrconfig
 
-import (
-	"encoding/json"
-)
-
 type Config struct {
 	// Target OS/arch, e.g. "linux/arm64" or "linux/amd64/386" (amd64 OS with 386 test process).
 	RawTarget string `json:"target"`
@@ -37,9 +33,6 @@ type Config struct {
 
 	// Type of virtual machine to use, e.g. "qemu", "gce", "android", "isolated", etc.
 	Type string `json:"type"`
-	// VM-type-specific parameters.
-	// Parameters for concrete types are in Config type in vm/TYPE/TYPE.go, e.g. vm/qemu/qemu.go.
-	VM json.RawMessage `json:"vm"`
 
 	SSHKey  string `json:"ssh_key,omitempty"`
 	SSHUser string `json:"ssh_user,omitempty"`

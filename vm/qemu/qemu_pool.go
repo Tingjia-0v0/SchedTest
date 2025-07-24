@@ -36,7 +36,7 @@ type Pool struct {
 	version string
 }
 
-func Ctor(env *vmimpl.Env) (vmimpl.Pool, error) {
+func Ctor(env *vmimpl.Env) (*Pool, error) {
 	cfg := &Config{
 		Count: 1,
 		CPU:   1,
@@ -84,7 +84,7 @@ func (pool *Pool) Count() int {
 	return pool.cfg.Count
 }
 
-func (pool *Pool) Create(workdir string, index int) (vmimpl.Instance, error) {
+func (pool *Pool) Create(workdir string, index int) (*Instance, error) {
 	sshkey := pool.env.SSHKey
 	sshuser := pool.env.SSHUser
 
@@ -107,8 +107,8 @@ func (pool *Pool) Create(workdir string, index int) (vmimpl.Instance, error) {
 	}
 }
 
-func (pool *Pool) ctor(workdir, sshkey, sshuser string, index int) (*instance, error) {
-	inst := &instance{
+func (pool *Pool) ctor(workdir, sshkey, sshuser string, index int) (*Instance, error) {
+	inst := &Instance{
 		index:    index,
 		cfg:      pool.cfg,
 		target:   pool.target,

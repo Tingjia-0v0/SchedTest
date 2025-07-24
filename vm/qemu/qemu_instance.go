@@ -12,7 +12,9 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strconv"
+	"strings"
 	"time"
 
 	"schedtest/pkg/log"
@@ -20,10 +22,12 @@ import (
 	"schedtest/sys/targets"
 	"schedtest/vm/vmimpl"
 
+	"schedtest/pkg/report"
+
 	"github.com/google/uuid"
 )
 
-type instance struct {
+type Instance struct {
 	index    int
 	cfg      *Config
 	target   *targets.Target
@@ -48,9 +52,11 @@ type instance struct {
 	qemu   *exec.Cmd
 	merger *vmimpl.OutputMerger
 	files  map[string]string
+
+	io.Closer
 }
 
-func (inst *instance) Close() error {
+func (inst *Instance) Close() error {
 	if inst.qemu != nil {
 		inst.qemu.Process.Kill()
 		inst.qemu.Wait()
@@ -71,7 +77,7 @@ func (inst *instance) Close() error {
 	return nil
 }
 
-func (inst *instance) boot() error {
+func (inst *Instance) boot() error {
 	inst.monport = vmimpl.UnusedTCPPort()
 	args, err := inst.buildQemuArgs()
 	if err != nil {
@@ -124,7 +130,7 @@ func (inst *instance) boot() error {
 	return nil
 }
 
-func (inst *instance) buildQemuArgs() ([]string, error) {
+func (inst *Instance) buildQemuArgs() ([]string, error) {
 	args := []string{
 		"-m", strconv.Itoa(inst.cfg.Mem),
 		"-smp", strconv.Itoa(inst.cfg.CPU),
@@ -147,7 +153,7 @@ func (inst *instance) buildQemuArgs() ([]string, error) {
 	return args, nil
 }
 
-func (inst *instance) Forward(port int) (string, error) {
+func (inst *Instance) Forward(port int) (string, error) {
 	if port == 0 {
 		return "", fmt.Errorf("vm/qemu: forward port is zero")
 	}
@@ -159,11 +165,11 @@ func (inst *instance) Forward(port int) (string, error) {
 	return fmt.Sprintf("localhost:%v", port), nil
 }
 
-func (inst *instance) targetDir() string {
+func (inst *Instance) targetDir() string {
 	return "/"
 }
 
-func (inst *instance) Copy(hostSrc string) (string, error) {
+func (inst *Instance) Copy(hostSrc string) (string, error) {
 	base := filepath.Base(hostSrc)
 	vmDst := filepath.Join(inst.targetDir(), base)
 
@@ -179,7 +185,7 @@ func (inst *instance) Copy(hostSrc string) (string, error) {
 	return vmDst, nil
 }
 
-func (inst *instance) Run(ctx context.Context, command string) (
+func (inst *Instance) Run(ctx context.Context, command string) (
 	<-chan []byte, <-chan error, error) {
 	rpipe, wpipe, err := osutil.LongPipe()
 	if err != nil {
@@ -209,57 +215,53 @@ func (inst *instance) Run(ctx context.Context, command string) (
 	return vmimpl.Multiplex(ctx, cmd, inst.merger, mergerErrName)
 }
 
-func (inst *instance) Info() ([]byte, error) {
+func (inst *Instance) Info() ([]byte, error) {
 	info := fmt.Sprintf("%v\n%v %q\n", inst.version, inst.cfg.Qemu, inst.args)
 	return []byte(info), nil
 }
 
-// nolint: lll
-const initScript = `#! /bin/bash
-set -eux
-mount -t proc none /proc
-mount -t sysfs none /sys
-mount -t debugfs nodev /sys/kernel/debug/
-mount -t tmpfs none /tmp
-mount -t tmpfs none /var
-mount -t tmpfs none /run
-mount -t tmpfs none /etc
-mount -t tmpfs none /root
-touch /etc/fstab
-mkdir /etc/network
-mkdir /run/network
-printf 'auto lo\niface lo inet loopback\n\n' >> /etc/network/interfaces
-printf 'auto eth0\niface eth0 inet static\naddress 10.0.2.15\nnetmask 255.255.255.0\nnetwork 10.0.2.0\ngateway 10.0.2.1\nbroadcast 10.0.2.255\n\n' >> /etc/network/interfaces
-printf 'auto eth0\niface eth0 inet6 static\naddress fe80::5054:ff:fe12:3456/64\ngateway 2000:da8:203:612:0:3:0:1\n\n' >> /etc/network/interfaces
-mkdir -p /etc/network/if-pre-up.d
-mkdir -p /etc/network/if-up.d
-ifup lo
-ifup eth0 || true
-echo "root::0:0:root:/root:/bin/bash" > /etc/passwd
-mkdir -p /etc/ssh
-cp {{KEY}}.pub /root/
-chmod 0700 /root
-chmod 0600 /root/key.pub
-mkdir -p /var/run/sshd/
-chmod 700 /var/run/sshd
-groupadd -g 33 sshd
-useradd -u 33 -g 33 -c sshd -d / sshd
-cat > /etc/ssh/sshd_config <<EOF
-          Port 22
-          Protocol 2
-          UsePrivilegeSeparation no
-          HostKey {{KEY}}
-          PermitRootLogin yes
-          AuthenticationMethods publickey
-          ChallengeResponseAuthentication no
-          AuthorizedKeysFile /root/key.pub
-          IgnoreUserKnownHosts yes
-          AllowUsers root
-          LogLevel INFO
-          TCPKeepAlive yes
-          RSAAuthentication yes
-          PubkeyAuthentication yes
-EOF
-/usr/sbin/sshd -e -D
-/sbin/halt -f
-`
+// DiagnoseLinux diagnoses some Linux kernel bugs over the provided ssh callback.
+func diagnoseLinux(rep *report.Report, ssh func(args ...string) ([]byte, error)) (output []byte, handled bool) {
+	if !strings.Contains(rep.Title, "MAX_LOCKDEP") {
+		return nil, false
+	}
+	// Dump /proc/lockdep* files on BUG: MAX_LOCKDEP_{KEYS,ENTRIES,CHAINS,CHAIN_HLOCKS} too low!
+	output, err := ssh("cat", "/proc/lockdep_stats", "/proc/lockdep", "/proc/lockdep_chains")
+	if err != nil {
+		output = append(output, err.Error()...)
+	}
+	// Remove mangled pointer values, they take lots of space but don't add any value.
+	output = regexp.MustCompile(` *\[?[0-9a-f]{8,}\]?\s*`).ReplaceAll(output, nil)
+	return output, true
+}
+
+func (inst *Instance) Diagnose(rep *report.Report) []byte {
+	if inst.target.OS == targets.Linux {
+		if output, handled := diagnoseLinux(rep, inst.ssh); handled {
+			return output
+		}
+	}
+	// TODO: we don't need registers on all reports. Probably only relevant for "crashes"
+	// (NULL derefs, paging faults, etc), but is not useful for WARNING/BUG/HANG (?).
+	ret := []byte(fmt.Sprintf("%s Registers:\n", time.Now().Format("15:04:05 ")))
+	for cpu := 0; cpu < inst.cfg.CPU; cpu++ {
+		regs, err := inst.hmp("info registers", cpu)
+		if err == nil {
+			ret = append(ret, []byte(fmt.Sprintf("info registers vcpu %v\n", cpu))...)
+			ret = append(ret, []byte(regs)...)
+		} else {
+			log.Logf(0, "VM-%v failed reading regs: %v", inst.index, err)
+			ret = append(ret, []byte(fmt.Sprintf("Failed reading regs: %v\n", err))...)
+		}
+	}
+	return ret
+}
+
+func (inst *Instance) ssh(args ...string) ([]byte, error) {
+	return osutil.RunCmd(time.Minute, "", "ssh", inst.sshArgs(args...)...)
+}
+
+func (inst *Instance) sshArgs(args ...string) []string {
+	sshArgs := append(vmimpl.SSHArgs(inst.debug, inst.User, inst.Port), inst.User+"@localhost")
+	return append(sshArgs, args...)
+}
