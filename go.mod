@@ -6,10 +6,12 @@ toolchain go1.23.10
 
 require (
 	github.com/VividCortex/gohistogram v1.0.0
+	github.com/google/flatbuffers v25.2.10+incompatible
 	github.com/google/uuid v1.6.0
 	github.com/ianlancetaylor/demangle v0.0.0-20250628045327-2d64ad6b7ec5
 	github.com/prometheus/client_golang v1.22.0
 	github.com/stretchr/testify v1.10.0
+	golang.org/x/sync v0.7.0
 	golang.org/x/sys v0.33.0
 )
 

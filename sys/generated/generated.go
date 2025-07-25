@@ -49,7 +49,7 @@ func fill(target *prog.Target, files embed.FS) {
 	if err := gob.NewDecoder(flate.NewReader(bytes.NewReader(data))).Decode(desc); err != nil {
 		panic(err)
 	}
-	// fill to target
+	// fill to target: load the generated syscalls, resources, consts, flags, and types
 	target.Syscalls = desc.Syscalls
 	target.Resources = desc.Resources
 	target.Consts = desc.Consts
